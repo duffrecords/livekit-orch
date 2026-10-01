@@ -82,9 +82,10 @@ KEDA is installed by its own chart (`make addons`, version pinned in the Makefil
 | Echo image rebuilt with a session live | Session kept its agent on the `Terminating` pod, which exited when the session was stopped; release `deployed` |
 | Without `--dev` | Headless Chrome and Firefox (fake microphone) received echoed audio over UDP; workers registered; webhooks arrived (a session ended with LiveKit's reason); no token in the log |
 | Agent from a values file only | An entry `parrot` using the echo image got workers, a session reached `ready` on it, and it was removed again by the next deploy |
+| Spoken conversation with the voice agent, by hand | Worked on the chart-deployed cluster, without `--dev` |
 
-Not verified: Helm 3; a spoken conversation with the voice agent, a real microphone, Safari, and
-TCP-only media since `--dev` was dropped; the chart on anything but this kind cluster.
+Not verified: Helm 3; Safari and TCP-only media since `--dev` was dropped; the chart on anything
+but this kind cluster.
 
 ## Dependencies and trade-offs
 

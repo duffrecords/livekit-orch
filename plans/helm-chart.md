@@ -5,8 +5,8 @@
 > code and step 7 could not pass otherwise, so `agents/` did change; `HELM_ARGS` was added to
 > the Makefile to pass a values file; LiveKit's pod also carries a checksum of its config, so a
 > config change restarts it; the "echo heard in a browser" checks used headless Chrome and
-> Firefox with a fake microphone, not a person. Not checked: Helm 3, and a spoken conversation
-> with the voice agent after the move. What was built and verified: `docs/notes/deployment.md`.
+> Firefox with a fake microphone, not a person. A spoken conversation with the voice agent was
+> checked by hand afterwards. Not checked: Helm 3. What was built and verified: `docs/notes/deployment.md`.
 
 ## Context
 
