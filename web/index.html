@@ -15,6 +15,7 @@
 <body>
   <h1>livekit-orch test client</h1>
   <p>Publishes your microphone to a room and plays back whatever the other participants publish.
+     With the <code>voice</code> agent it also shows what was said.
      Query parameters <code>url</code>, <code>token</code> and <code>auto=1</code> prefill and connect;
      <code>api</code>, <code>agent</code> and <code>start=1</code> start a session through the orchestrator.</p>
   <h2>Session</h2>
@@ -30,6 +31,9 @@
   <button id="disconnect" disabled>Disconnect</button>
   <h2>Status</h2>
   <pre id="status">disconnected</pre>
+  <h2>Conversation</h2>
+  <pre id="agentState">agent: –</pre>
+  <pre id="transcript"></pre>
   <h2>Media path</h2>
   <pre id="stats">–</pre>
   <h2>Events</h2>
@@ -43,6 +47,33 @@
     let statsTimer = null;
     let sessionId = null;
     let sessionTimer = null;
+
+    // segment ID -> the line showing it
+    const segments = new Map();
+
+    // The voice agent publishes what it heard and what it says as text
+    // streams. A segment is sent again as it grows (interim transcripts) and
+    // an agent reply arrives in chunks, so each segment keeps one line.
+    async function showTranscription(reader, participantInfo) {
+      const id = reader.info.attributes?.['lk.segment_id'] ?? reader.info.id;
+      let line = segments.get(id);
+      if (!line) {
+        line = document.createElement('div');
+        segments.set(id, line);
+        $('transcript').appendChild(line);
+      }
+      const who = participantInfo.identity === room?.localParticipant.identity ? 'you' : 'agent';
+      let text = '';
+      for await (const chunk of reader) {
+        text += chunk;
+        line.textContent = `${who}: ${text}`;
+      }
+    }
+
+    function showAgentState(participant) {
+      const state = participant.attributes?.['lk.agent.state'];
+      if (state) $('agentState').textContent = `agent: ${state}`;
+    }
 
     function log(msg) {
       $('log').textContent += `${new Date().toLocaleTimeString()} ${msg}\n`;
@@ -95,7 +126,8 @@
       room = new Room();
       room
         .on(RoomEvent.ConnectionStateChanged, (state) => { $('status').textContent = state; log(`state: ${state}`); })
-        .on(RoomEvent.ParticipantConnected, (p) => log(`participant joined: ${p.identity}`))
+        .on(RoomEvent.ParticipantConnected, (p) => { log(`participant joined: ${p.identity}`); showAgentState(p); })
+        .on(RoomEvent.ParticipantAttributesChanged, (_changed, p) => showAgentState(p))
         .on(RoomEvent.ParticipantDisconnected, (p) => log(`participant left: ${p.identity}`))
         .on(RoomEvent.TrackSubscribed, (track, _pub, p) => {
           log(`subscribed to ${track.kind} from ${p.identity}`);
@@ -103,6 +135,10 @@
         })
         .on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()))
         .on(RoomEvent.Disconnected, (reason) => { log(`disconnected: ${reason}`); teardown(); });
+
+      room.registerTextStreamHandler('lk.transcription', (reader, info) => {
+        showTranscription(reader, info).catch((err) => log(`transcript error: ${err.message}`));
+      });
 
       $('connect').disabled = true;
       try {
@@ -113,6 +149,7 @@
         log('microphone acquired');
         await room.connect($('url').value.trim(), $('token').value.trim());
         log(`joined room ${room.name} as ${room.localParticipant.identity}`);
+        room.remoteParticipants.forEach(showAgentState);
         await room.localParticipant.publishTrack(micTrack);
         log('microphone published');
         $('disconnect').disabled = false;
@@ -126,6 +163,7 @@
 
     function teardown() {
       clearInterval(statsTimer);
+      $('agentState').textContent = 'agent: –';
       $('connect').disabled = false;
       $('disconnect').disabled = true;
     }

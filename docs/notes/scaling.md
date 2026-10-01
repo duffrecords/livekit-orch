@@ -81,6 +81,19 @@ and echoing an Opus stream (`lk room join --publish`):
 
 Requests are set from this: `cpu: 300m`, `memory: 640Mi`, memory limit `1Gi`, no CPU limit.
 
+The voice agent (2026-10-01), same method, five live conversations driven by `lk` publishers:
+
+| | CPU | Memory |
+|---|---|---|
+| Idle pod | about 65m | about 500 to 530 MB |
+| Pod with 5 conversations | 330m to 380m | about 880 MB |
+| Per conversation | about 60m | about 75 MB |
+
+The numbers were the same with OpenAI and with Deepgram + Claude. Its requests are `cpu: 400m`,
+`memory: 900Mi`, memory limit `1536Mi`. It keeps `MAX_JOBS` 5 and the target of 3 sessions per
+pod, with at most 3 pods (`deploy/voice/agent-voice-scaling.yaml`). `make load AGENT=voice
+COUNT=8` took the workers 1 → 3 → 1 with all sessions `ready` after 13 s.
+
 Not verified: audio heard in a browser during a scale-down. Agent presence was checked through
 the API, and audio through the agent's frame counters with an `lk` publisher.
 
@@ -91,8 +104,10 @@ the API, and audio through the agent's frame counters with an `lk` publisher.
   pulled from the internet by `make addons`. metrics-server is only for `kubectl top`; the
   scaling path does not use it.
 - **Job count, not CPU.** Deterministic and right for the echo agent. It ignores real CPU
-  pressure, so `MAX_JOBS` has to be sized by measurement for each agent. The provider-backed
-  agent may want a CPU trigger next to the session trigger.
+  pressure, so `MAX_JOBS` has to be sized by measurement for each agent. The voice agent did
+  not need a CPU trigger: five conversations use about a third of one CPU, and what limits it
+  first is memory per pod and the providers' rate limits
+  (`docs/notes/voice-pipeline-providers.md`).
 - **Reaction time.** The HPA evaluates every 15 s, so a burst beyond the spare slots waits up
   to about 15 s for pods, then up to 5 s for the re-dispatch. Pod start is about 3 s with the
   image already on the node.
@@ -101,7 +116,8 @@ the API, and audio through the agent's frame counters with an `lk` publisher.
   while its sessions run. `rollout restart deploy/agent-echo` behaves the same way; in
   development, stop the sessions first or delete the pod with `--grace-period=0 --force`.
 - **Sessions nobody joined count as demand** until their room's `empty_timeout` (120 s).
-- **One node.** This scales pods, not nodes. Six worker pods need about 3 GB of the 8 GB
-  Docker VM.
+- **One node.** This scales pods, not nodes. Six echo worker pods need about 3 GB of the 8 GB
+  Docker VM, and three busy voice pods about 2.7 GB more: put one agent type under load at a
+  time.
 - **`full` in `/workers` is a convention.** It means `worker_load >= 1.0`, which holds for
   workers using the job-count load function above.

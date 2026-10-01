@@ -74,7 +74,8 @@ hold_until=$((SECONDS + HOLD))
 while [ "$SECONDS" -lt "$hold_until" ]; do sleep 5; line "$(statuses)"; done
 peak=$(running)
 echo "jobs per worker:"
-curl -fsS "$API/workers" | jq -r '.workers[] | "  \(.address)  jobs=\(.jobs)\(if .full then "  FULL" else "" end)"'
+curl -fsS "$API/workers" | jq -r --arg agent "$AGENT" \
+  '.workers[] | select(.agent == $agent) | "  \(.address)  jobs=\(.jobs)\(if .full then "  FULL" else "" end)"'
 
 echo "stopping sessions"
 for id in $(echo "$ids_json" | jq -r '.[]'); do

@@ -1,6 +1,7 @@
 CLUSTER     := livekit-orch
 NAMESPACE   := livekit
 AGENT_IMAGE := livekit-orch/agent-echo:dev
+VOICE_IMAGE := livekit-orch/agent-voice:dev
 ORCH_IMAGE  := livekit-orch/orchestrator:dev
 ROOM        ?= spike
 IDENTITY    ?= user1
@@ -13,13 +14,19 @@ KEDA_VERSION := 2.21.0
 -include .env
 export LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET
 
+# The voice agent needs an external speech/LLM provider, so it is built and
+# deployed only when .env holds a key for one. Without a key everything else
+# works as before, with the keyless echo agent.
+PROVIDER_KEYS := OPENAI_API_KEY|DEEPGRAM_API_KEY|ANTHROPIC_API_KEY
+VOICE := $(shell grep -qsE '^($(PROVIDER_KEYS))=.+' .env && echo 1)
+
 # Address LiveKit advertises to host clients: the host's primary LAN address,
 # detected at deploy time (never committed). Falls back to loopback when there
 # is no network; loopback works in Chrome but not Firefox. Override with
 # `make deploy NODE_IP=...` or NODE_IP in .env.
 NODE_IP ?= $(shell python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('192.0.2.1', 9)); print(s.getsockname()[0])" 2>/dev/null || echo 127.0.0.1)
 
-.PHONY: up down env cluster addons image secret node-ip deploy session sessions stop workers scale top load smoke test token dispatch web logs status
+.PHONY: up down env cluster addons image secret node-ip deploy voice session sessions stop workers scale top load smoke test token dispatch web logs status
 
 up: env cluster addons image secret deploy ## create the cluster and deploy everything
 
@@ -46,6 +53,10 @@ image:
 	docker build -t $(AGENT_IMAGE) agents/echo
 	docker build -t $(ORCH_IMAGE) orchestrator
 	kind load docker-image $(AGENT_IMAGE) $(ORCH_IMAGE) --name $(CLUSTER)
+ifeq ($(VOICE),1)
+	docker build -t $(VOICE_IMAGE) agents/voice
+	kind load docker-image $(VOICE_IMAGE) --name $(CLUSTER)
+endif
 
 # re-invoke make so a freshly generated .env is picked up
 secret:
@@ -76,6 +87,29 @@ deploy: node-ip
 	kubectl -n $(NAMESPACE) rollout status deploy/livekit --timeout=120s
 	kubectl -n $(NAMESPACE) rollout status deploy/agent-echo --timeout=180s
 	kubectl -n $(NAMESPACE) rollout status deploy/orchestrator --timeout=120s
+ifeq ($(VOICE),1)
+	@$(MAKE) --no-print-directory voice
+else
+	@kubectl delete -f deploy/voice/ --ignore-not-found --wait=false
+	@kubectl -n $(NAMESPACE) delete secret/provider-keys configmap/agent-voice-config --ignore-not-found
+endif
+
+# Provider keys and VOICE_* settings go from .env into a Secret and a ConfigMap
+# through stdin, so a key never appears on a command line. The workers read
+# them at startup only, so they are restarted when either has changed.
+voice:
+	@objects="secret/provider-keys configmap/agent-voice-config"; \
+	versions() { kubectl -n $(NAMESPACE) get $$objects -o jsonpath='{.items[*].metadata.resourceVersion}' 2>/dev/null; }; \
+	before=$$(versions); \
+	grep -E '^($(PROVIDER_KEYS))=.+' .env | kubectl -n $(NAMESPACE) create secret generic provider-keys \
+		--from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null; \
+	grep -E '^VOICE_[A-Z_]+=.+' .env | kubectl -n $(NAMESPACE) create configmap agent-voice-config \
+		--from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null; \
+	kubectl apply -f deploy/voice/; \
+	if [ -n "$$before" ] && [ "$$before" != "$$(versions)" ]; then \
+		echo "voice settings changed; restarting agent-voice"; \
+		kubectl -n $(NAMESPACE) rollout restart deploy/agent-voice; fi
+	kubectl -n $(NAMESPACE) rollout status deploy/agent-voice --timeout=180s
 
 session: ## start a session with AGENT; prints its ID, URL and token
 	@curl -fsS -X POST $(API)/sessions -H 'Content-Type: application/json' \
@@ -107,16 +141,17 @@ load: ## start COUNT sessions and watch the workers scale up and back down
 smoke: ## end-to-end API check against the running cluster
 	API=$(API) scripts/smoke.sh
 
-test: ## orchestrator unit tests (no cluster needed)
+test: ## unit tests (no cluster or API keys needed)
 	cd orchestrator && uv run pytest -q
+	cd agents/voice && uv run pytest -q
 
 # token and dispatch talk to LiveKit directly, bypassing the orchestrator;
 # kept for debugging.
 token: ## print a join token for ROOM / IDENTITY
 	@lk token create --join --room $(ROOM) --identity $(IDENTITY) --valid-for 1h
 
-dispatch: ## send the echo agent to ROOM
-	lk dispatch create --agent-name echo --room $(ROOM)
+dispatch: ## send AGENT to ROOM
+	lk dispatch create --agent-name $(AGENT) --room $(ROOM)
 
 web: ## serve the browser test client
 	python3 -m http.server $(WEB_PORT) --bind 127.0.0.1 --directory web
@@ -127,7 +162,7 @@ status:
 
 logs:
 	kubectl -n $(NAMESPACE) logs deploy/livekit --tail=50
-	kubectl -n $(NAMESPACE) logs deploy/agent-echo --tail=50
+	kubectl -n $(NAMESPACE) logs deploy/agent-$(AGENT) --tail=50
 	kubectl -n $(NAMESPACE) logs deploy/orchestrator --tail=50
 
 down: ## delete the cluster

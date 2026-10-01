@@ -30,11 +30,13 @@ spec:
             # signaling URL handed to clients, as seen from the host
             - name: LIVEKIT_PUBLIC_URL
               value: ws://localhost:7880
+            # the first is the default; voice has workers only when .env holds
+            # a provider key
             - name: AGENT_NAMES
-              value: echo
+              value: echo,voice
             # agent name = headless Service of its worker pods
             - name: WORKER_SERVICES
-              value: echo=agent-echo.livekit.svc.cluster.local:8081
+              value: echo=agent-echo.livekit.svc.cluster.local:8081,voice=agent-voice.livekit.svc.cluster.local:8081
             - name: LIVEKIT_API_KEY
               valueFrom:
                 secretKeyRef:
