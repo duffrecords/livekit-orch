@@ -89,13 +89,20 @@ the level.
   lookup in that gap waits up to 1 s for the webhook instead of answering 404.
 - The webhook signing key can be set with `LIVEKIT_WEBHOOK_API_KEY` (from the existing Secret);
   `webhook.urls` has to be in the config file.
+- A room deleted while its agent is on the way in comes back: the agent's join recreates it,
+  without metadata and with LiveKit's default 5-minute empty timeout. Seen when a session was
+  stopped 0.15 s after it was started; the room then read `ready` with no agent name for five
+  minutes and kept its worker pod from draining. The reaper now deletes any live room whose
+  session has ended (IDs are never reused), so such a room lasts at most 30 s. Checked on the
+  cluster: gone within 35 s, and the session reads `ended` / `stopped`.
 - With this client and server version the browser uses a single peer connection, so the test
   page's audio counters are under `publisher` and `subscriber` is null.
 - While a pod is being replaced, the old one keeps receiving some requests for a few seconds.
 
 ## Verified (2026-09-30, macOS, headless Chrome with a fake microphone)
 
-- `make test`: 26 unit tests against a fake LiveKit client (33 since the scaling milestone).
+- `make test`: 26 unit tests against a fake LiveKit client (33 since the scaling milestone, 34
+  with the revived-room case).
 - `make smoke`: 10 sessions started in parallel, all `ready`, all stopped, no room left; 1.7 s
   in total on one worker pod. The worker afterwards held only its warm idle processes.
 - Two browser tabs each started their own session from the test page and received echoed

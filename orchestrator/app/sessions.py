@@ -372,7 +372,14 @@ class SessionService:
     # -- background -------------------------------------------------------
 
     async def reap(self) -> list[str]:
-        """Delete sessions older than the maximum duration, occupied or not."""
+        """Delete sessions older than the maximum duration, occupied or not,
+        and rooms that came back after their session ended.
+
+        An agent that is on its way into a room when the room is deleted
+        recreates it by joining (seen when a session was stopped 0.15 s after
+        it was started). Session IDs are never reused, so a live room whose
+        session has ended is such a leftover.
+        """
         res = await self._lk.room.list_rooms(api.ListRoomsRequest())
         cutoff = self._clock() - self._settings.session_max_seconds
         expired = [
@@ -380,9 +387,18 @@ class SessionService:
             for room in res.rooms
             if SESSION_ID.match(room.name) and room.creation_time < cutoff
         ]
+        revived = [room for room in res.rooms if room.name in self._ended]
         for room in expired:
             await self._delete(room, "expired")
-        return [room.name for room in expired]
+        for room in revived:
+            try:
+                await self._lk.room.delete_room(api.DeleteRoomRequest(room=room.name))
+            except api.TwirpError as err:
+                if err.code != "not_found":
+                    raise
+                continue  # the stop that ended it was still in progress
+            logger.info("room of an ended session removed", extra={"session_id": room.name})
+        return [room.name for room in expired + revived]
 
     async def redispatch(self) -> list[str]:
         """Dispatch again for sessions that have waited too long for their agent.

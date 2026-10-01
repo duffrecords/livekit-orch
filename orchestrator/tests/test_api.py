@@ -271,6 +271,18 @@ def test_reaped_session_reports_expired(client, lk, settings):
     assert client.get(f"/sessions/{sid}").json()["end_reason"] == "expired"
 
 
+def test_reaper_removes_a_room_that_came_back_after_its_session_ended(client, lk):
+    sid = start(client)["id"]
+    client.delete(f"/sessions/{sid}")
+    # an agent that was already joining recreates the room
+    lk.rooms[sid] = api.Room(name=sid, creation_time=int(time.time()))
+    service: SessionService = client.app.state.sessions
+
+    assert client.portal.call(service.reap) == [sid]
+    assert sid not in lk.rooms
+    assert client.get(f"/sessions/{sid}").json()["end_reason"] == "stopped"
+
+
 # -- workers and scaling -------------------------------------------------
 
 
