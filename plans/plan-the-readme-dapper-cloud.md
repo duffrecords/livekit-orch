@@ -6,7 +6,7 @@
 > reaper (`docs/notes/orchestrator.md`) rather than documented; the second run used a copy of
 > the working tree, not a clone, because the changes were not committed; browser steps were
 > run in headless Chrome and Firefox with a fake microphone; the spoken conversation with the
-> voice agent in step 5 was done by hand afterwards and worked. Not done: a timing of `make up`
+> voice agent in step 5 was done by hand afterwards, in Chrome, Firefox and Safari, and worked. Not done: a timing of `make up`
 > with no cached images.
 
 ## Context

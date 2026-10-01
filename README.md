@@ -364,7 +364,7 @@ Not verified:
 | Symptom | Cause and fix |
 |---|---|
 | Firefox cannot connect, or nothing connects after changing networks | LiveKit advertises the host's LAN address, detected at deploy time (loopback if there was no network, which Firefox cannot use). Run `make deploy`; override with `make deploy NODE_IP=<address>` |
-| No media on a VPN or restrictive network | Not tested. UDP 7882 may be blocked; LiveKit also offers TCP 7881, and disconnecting the VPN is the first thing to try |
+| No media on a VPN or restrictive network | UDP 7882 may be blocked. LiveKit also offers TCP 7881, which works on its own (checked with `make deploy HELM_ARGS="--set livekit.forceTcp=true"`), but no real VPN was tested; disconnecting it is the first thing to try |
 | A worker pod stays `Terminating` | It is finishing its sessions. Stop them (`make sessions`, `make stop ID=…`), or wait |
 | A session stays `pending (workers_full)` | All pods are full and the maximum (6 for echo, 3 for voice) is reached, or new pods are still starting |
 | A voice session stays `pending (no_workers)` | No provider key in `.env`, so the voice agent is not deployed |

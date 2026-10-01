@@ -30,6 +30,9 @@ livekit:
   # to each one fails with "address already in use".
   interfaces:
     - eth0
+  # Offer clients TCP (7881) only, to test the fallback used when UDP is
+  # blocked: `make deploy HELM_ARGS="--set livekit.forceTcp=true"`.
+  forceTcp: false
   # Development mode: debug logging, which prints join tokens.
   dev: false
 

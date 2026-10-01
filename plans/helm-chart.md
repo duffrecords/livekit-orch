@@ -6,7 +6,7 @@
 > the Makefile to pass a values file; LiveKit's pod also carries a checksum of its config, so a
 > config change restarts it; the "echo heard in a browser" checks used headless Chrome and
 > Firefox with a fake microphone, not a person. A spoken conversation with the voice agent was
-> checked by hand afterwards. Not checked: Helm 3. What was built and verified: `docs/notes/deployment.md`.
+> checked by hand afterwards, in Chrome, Firefox and Safari. Not checked: Helm 3. What was built and verified: `docs/notes/deployment.md`.
 
 ## Context
 

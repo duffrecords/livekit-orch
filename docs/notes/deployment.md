@@ -55,6 +55,9 @@ KEDA is installed by its own chart (`make addons`, version pinned in the Makefil
 - **LiveKit runs without `--dev`.** Nothing else had to be set: keys come from `LIVEKIT_KEYS`,
   `--bind 0.0.0.0` was already passed. The log has no debug lines and no tokens.
   `livekit.dev: true` turns it back on.
+- `livekit.forceTcp: true` makes the server offer TCP 7881 only, to test the fallback used when
+  UDP is blocked: `make deploy HELM_ARGS="--set livekit.forceTcp=true"`, and `make deploy` to
+  go back.
 - No `--wait` on the application release. A worker rollout waits for its sessions to drain;
   `kubectl rollout status` returns once the new pod is ready and leaves the old one
   `Terminating`, and the release stays `deployed`.
@@ -82,10 +85,10 @@ KEDA is installed by its own chart (`make addons`, version pinned in the Makefil
 | Echo image rebuilt with a session live | Session kept its agent on the `Terminating` pod, which exited when the session was stopped; release `deployed` |
 | Without `--dev` | Headless Chrome and Firefox (fake microphone) received echoed audio over UDP; workers registered; webhooks arrived (a session ended with LiveKit's reason); no token in the log |
 | Agent from a values file only | An entry `parrot` using the echo image got workers, a session reached `ready` on it, and it was removed again by the next deploy |
-| Spoken conversation with the voice agent, by hand | Worked on the chart-deployed cluster, without `--dev` |
+| Spoken conversation with the voice agent, by hand | Worked in Chrome, Firefox and Safari on the chart-deployed cluster, without `--dev` |
+| TCP-only media without `--dev` (`livekit.forceTcp=true`) | Headless Chrome and Firefox, and Safari by hand, connected to `:7881` over TCP and received the echo; the agent logged frames received and played |
 
-Not verified: Helm 3; Safari and TCP-only media since `--dev` was dropped; the chart on anything
-but this kind cluster.
+Not verified: Helm 3; the chart on anything but this kind cluster.
 
 ## Dependencies and trade-offs
 
