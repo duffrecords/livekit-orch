@@ -15,9 +15,17 @@
 <body>
   <h1>livekit-orch test client</h1>
   <p>Publishes your microphone to a room and plays back whatever the other participants publish.
-     Query parameters <code>url</code>, <code>token</code> and <code>auto=1</code> prefill and connect.</p>
+     Query parameters <code>url</code>, <code>token</code> and <code>auto=1</code> prefill and connect;
+     <code>api</code>, <code>agent</code> and <code>start=1</code> start a session through the orchestrator.</p>
+  <h2>Session</h2>
+  <label>Orchestrator API <input id="api" value="http://localhost:8080"></label>
+  <label>Agent <input id="agent" value="echo"></label>
+  <button id="start">Start session</button>
+  <button id="stop" disabled>Stop session</button>
+  <pre id="session">no session</pre>
+  <h2>Manual join</h2>
   <label>Server URL <input id="url" value="ws://localhost:7880"></label>
-  <label>Token <input id="token" placeholder="output of `make token`"></label>
+  <label>Token <input id="token" placeholder="filled by Start session, or the output of `make token`"></label>
   <button id="connect">Connect</button>
   <button id="disconnect" disabled>Disconnect</button>
   <h2>Status</h2>
@@ -33,6 +41,8 @@
     const $ = (id) => document.getElementById(id);
     let room = null;
     let statsTimer = null;
+    let sessionId = null;
+    let sessionTimer = null;
 
     function log(msg) {
       $('log').textContent += `${new Date().toLocaleTimeString()} ${msg}\n`;
@@ -120,13 +130,88 @@
       $('disconnect').disabled = true;
     }
 
+    async function apiCall(method, path, body) {
+      const res = await fetch($('api').value.trim().replace(/\/$/, '') + path, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = res.status === 204 ? null : await res.json();
+      if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${data?.detail ?? ''}`);
+      return data;
+    }
+
+    function showSession(session) {
+      window.__session = session;
+      const { token, ...rest } = session;
+      $('session').textContent = JSON.stringify(rest, null, 2);
+    }
+
+    // Ask the orchestrator for a room with an agent already dispatched, then
+    // join it with the URL and token that come back.
+    async function startSession() {
+      $('start').disabled = true;
+      try {
+        const session = await apiCall('POST', '/sessions', { agent: $('agent').value.trim() || null });
+        sessionId = session.id;
+        log(`session ${session.id} started (${session.status})`);
+        showSession(session);
+        $('url').value = session.url;
+        $('token').value = session.token;
+        $('stop').disabled = false;
+        sessionTimer = setInterval(refreshSession, 2000);
+        await connect();
+      } catch (err) {
+        log(`error: ${err.message}`);
+        $('start').disabled = false;
+      }
+    }
+
+    async function refreshSession() {
+      if (!sessionId) return;
+      try {
+        const session = await apiCall('GET', `/sessions/${sessionId}`);
+        showSession(session);
+        if (session.status === 'ended') {
+          log(`session ${sessionId} ended (${session.end_reason})`);
+          clearSession();
+        }
+      } catch (err) {
+        $('session').textContent = err.message;
+        clearSession();
+      }
+    }
+
+    async function stopSession() {
+      if (!sessionId) return;
+      try {
+        await apiCall('DELETE', `/sessions/${sessionId}`);
+        log(`session ${sessionId} stopped`);
+        await refreshSession();
+      } catch (err) {
+        log(`error: ${err.message}`);
+      }
+    }
+
+    function clearSession() {
+      clearInterval(sessionTimer);
+      sessionId = null;
+      $('start').disabled = false;
+      $('stop').disabled = true;
+    }
+
+    $('start').onclick = startSession;
+    $('stop').onclick = stopSession;
     $('connect').onclick = connect;
     $('disconnect').onclick = () => room?.disconnect();
 
     const params = new URLSearchParams(location.search);
     if (params.get('url')) $('url').value = params.get('url');
     if (params.get('token')) $('token').value = params.get('token');
-    if (params.get('auto') === '1') connect();
+    if (params.get('api')) $('api').value = params.get('api');
+    if (params.has('agent')) $('agent').value = params.get('agent');
+    if (params.get('start') === '1') startSession();
+    else if (params.get('auto') === '1') connect();
   </script>
 </body>
 </html>

@@ -22,6 +22,11 @@ data:
       interfaces:
         includes:
           - eth0
+    # Room and participant lifecycle events go to the orchestrator. They are
+    # signed with the key named by LIVEKIT_WEBHOOK_API_KEY (set on the pod).
+    webhook:
+      urls:
+        - http://orchestrator.livekit.svc.cluster.local:8080/webhooks/livekit
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -68,6 +73,11 @@ spec:
                 secretKeyRef:
                   name: livekit-keys
                   key: LIVEKIT_KEYS
+            - name: LIVEKIT_WEBHOOK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: livekit-keys
+                  key: LIVEKIT_API_KEY
           ports:
             - name: signal
               containerPort: 7880

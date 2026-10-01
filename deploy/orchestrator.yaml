@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: livekit
+  labels:
+    app: orchestrator
+spec:
+  # Ended-session history and the reaper live in this process, so run one
+  # replica. Live-session calls are stateless.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      # keep Service-derived LIVEKIT_* variables out of the environment
+      enableServiceLinks: false
+      containers:
+        - name: orchestrator
+          image: livekit-orch/orchestrator:dev
+          # image is side-loaded with `kind load docker-image`
+          imagePullPolicy: Never
+          env:
+            - name: LIVEKIT_URL
+              value: http://livekit.livekit.svc.cluster.local:7880
+            # signaling URL handed to clients, as seen from the host
+            - name: LIVEKIT_PUBLIC_URL
+              value: ws://localhost:7880
+            - name: AGENT_NAMES
+              value: echo
+            - name: LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: livekit-keys
+                  key: LIVEKIT_API_KEY
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: livekit-keys
+                  key: LIVEKIT_API_SECRET
+          ports:
+            - name: http
+              containerPort: 8080
+          # ready only while the LiveKit server API answers
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  namespace: livekit
+spec:
+  type: NodePort
+  selector:
+    app: orchestrator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      # kind maps this node port to 127.0.0.1:8080 on the host
+      nodePort: 30080
+      protocol: TCP
