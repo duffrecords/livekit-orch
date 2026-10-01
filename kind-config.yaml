@@ -1,0 +1,22 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: livekit-orch
+nodes:
+  - role: control-plane
+    # LiveKit runs with hostNetwork on this node, so each port keeps the same
+    # number from the host to the server. Published on all host interfaces
+    # because LiveKit advertises the host's LAN address (Firefox can't use a
+    # loopback candidate), so these ports are reachable from the local network.
+    extraPortMappings:
+      - containerPort: 7880 # signaling (HTTP/WebSocket)
+        hostPort: 7880
+        listenAddress: "0.0.0.0"
+        protocol: TCP
+      - containerPort: 7881 # ICE/TCP fallback
+        hostPort: 7881
+        listenAddress: "0.0.0.0"
+        protocol: TCP
+      - containerPort: 7882 # ICE/UDP mux
+        hostPort: 7882
+        listenAddress: "0.0.0.0"
+        protocol: UDP

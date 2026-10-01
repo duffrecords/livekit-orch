@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-echo
+  namespace: livekit
+  labels:
+    app: agent-echo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-echo
+  template:
+    metadata:
+      labels:
+        app: agent-echo
+    spec:
+      # keep Service-derived LIVEKIT_* variables out of the worker's environment
+      enableServiceLinks: false
+      containers:
+        - name: agent
+          image: livekit-orch/agent-echo:dev
+          # image is side-loaded with `kind load docker-image`
+          imagePullPolicy: Never
+          env:
+            - name: LIVEKIT_URL
+              value: ws://livekit.livekit.svc.cluster.local:7880
+            - name: LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: livekit-keys
+                  key: LIVEKIT_API_KEY
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: livekit-keys
+                  key: LIVEKIT_API_SECRET
+          ports:
+            - name: health
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 10

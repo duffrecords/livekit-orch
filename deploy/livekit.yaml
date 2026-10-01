@@ -1,0 +1,112 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: livekit-config
+  namespace: livekit
+data:
+  livekit.yaml: |
+    port: 7880
+    rtc:
+      tcp_port: 7881
+      udp_port: 7882
+      use_external_ip: false
+      # The advertised address (node_ip) comes from the NODE_IP env var, which
+      # `make deploy` sets to the host's LAN address: host browsers reach the
+      # server there through the kind port mappings.
+      # Keep the node's real IP as a candidate too, so in-cluster agents
+      # (which can't use the host's address) can reach the server.
+      advertise_internal_ip: true
+      # With hostNetwork the server sees every pod veth on the node. kindnet
+      # gives them all the same address, and binding the UDP mux to each one
+      # fails with "address already in use". Use the node's own interface only.
+      interfaces:
+        includes:
+          - eth0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: livekit
+  namespace: livekit
+  labels:
+    app: livekit
+spec:
+  replicas: 1
+  # hostNetwork ports can't be held by two pods at once
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: livekit
+  template:
+    metadata:
+      labels:
+        app: livekit
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      # The `livekit` Service would inject LIVEKIT_PORT=tcp://..., which the
+      # server reads as its (numeric) port setting and crashes on.
+      enableServiceLinks: false
+      containers:
+        - name: livekit
+          image: livekit/livekit-server:v1.13.7
+          args:
+            - --dev
+            - --bind
+            - 0.0.0.0
+            - --config
+            - /etc/livekit/livekit.yaml
+          env:
+            - name: NODE_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: livekit-node
+                  key: NODE_IP
+            - name: LIVEKIT_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: livekit-keys
+                  key: LIVEKIT_KEYS
+          ports:
+            - name: signal
+              containerPort: 7880
+              protocol: TCP
+            - name: ice-tcp
+              containerPort: 7881
+              protocol: TCP
+            - name: ice-udp
+              containerPort: 7882
+              protocol: UDP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 7880
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 7880
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/livekit
+      volumes:
+        - name: config
+          configMap:
+            name: livekit-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: livekit
+  namespace: livekit
+spec:
+  selector:
+    app: livekit
+  ports:
+    - name: signal
+      port: 7880
+      targetPort: 7880
+      protocol: TCP

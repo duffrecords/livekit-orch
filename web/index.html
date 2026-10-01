@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>livekit-orch test client</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin: .5rem 0; }
+    input { width: 100%; box-sizing: border-box; font: inherit; padding: .3rem; }
+    button { font: inherit; padding: .3rem .8rem; margin-right: .5rem; }
+    pre { background: #8881; padding: .6rem; overflow-x: auto; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>livekit-orch test client</h1>
+  <p>Publishes your microphone to a room and plays back whatever the other participants publish.
+     Query parameters <code>url</code>, <code>token</code> and <code>auto=1</code> prefill and connect.</p>
+  <label>Server URL <input id="url" value="ws://localhost:7880"></label>
+  <label>Token <input id="token" placeholder="output of `make token`"></label>
+  <button id="connect">Connect</button>
+  <button id="disconnect" disabled>Disconnect</button>
+  <h2>Status</h2>
+  <pre id="status">disconnected</pre>
+  <h2>Media path</h2>
+  <pre id="stats">–</pre>
+  <h2>Events</h2>
+  <pre id="log"></pre>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.3/dist/livekit-client.umd.min.js"></script>
+  <script>
+    const { Room, RoomEvent, Track, createLocalTracks } = LivekitClient;
+    const $ = (id) => document.getElementById(id);
+    let room = null;
+    let statsTimer = null;
+
+    function log(msg) {
+      $('log').textContent += `${new Date().toLocaleTimeString()} ${msg}\n`;
+    }
+
+    // Selected ICE candidate pair and audio counters for one peer connection.
+    async function transportStats(transport) {
+      if (!transport) return null;
+      const report = await transport.getStats();
+      const byId = {};
+      let pair = null;
+      let inbound = null;
+      let outbound = null;
+      report.forEach((s) => { byId[s.id] = s; });
+      report.forEach((s) => {
+        if (s.type === 'transport' && s.selectedCandidatePairId) pair = byId[s.selectedCandidatePairId];
+        if (s.type === 'inbound-rtp' && s.kind === 'audio') inbound = s;
+        if (s.type === 'outbound-rtp' && s.kind === 'audio') outbound = s;
+      });
+      if (!pair) {
+        report.forEach((s) => {
+          if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pair = s;
+        });
+      }
+      if (!pair) return null;
+      const describe = (c) => c && `${c.protocol} ${c.address ?? c.ip}:${c.port} (${c.candidateType})`;
+      return {
+        local: describe(byId[pair.localCandidateId]),
+        remote: describe(byId[pair.remoteCandidateId]),
+        audioPacketsSent: outbound?.packetsSent ?? 0,
+        audioPacketsReceived: inbound?.packetsReceived ?? 0,
+        audioEnergyReceived: inbound?.totalAudioEnergy ?? 0,
+      };
+    }
+
+    async function refreshStats() {
+      if (!room) return;
+      const pcManager = room.engine?.pcManager;
+      const stats = {
+        state: room.state,
+        participants: [...room.remoteParticipants.values()].map((p) => p.identity),
+        publisher: await transportStats(pcManager?.publisher).catch(() => null),
+        subscriber: await transportStats(pcManager?.subscriber).catch(() => null),
+      };
+      window.__stats = stats;
+      $('stats').textContent = JSON.stringify(stats, null, 2);
+    }
+
+    async function connect() {
+      room = new Room();
+      room
+        .on(RoomEvent.ConnectionStateChanged, (state) => { $('status').textContent = state; log(`state: ${state}`); })
+        .on(RoomEvent.ParticipantConnected, (p) => log(`participant joined: ${p.identity}`))
+        .on(RoomEvent.ParticipantDisconnected, (p) => log(`participant left: ${p.identity}`))
+        .on(RoomEvent.TrackSubscribed, (track, _pub, p) => {
+          log(`subscribed to ${track.kind} from ${p.identity}`);
+          if (track.kind === Track.Kind.Audio) document.body.appendChild(track.attach());
+        })
+        .on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()))
+        .on(RoomEvent.Disconnected, (reason) => { log(`disconnected: ${reason}`); teardown(); });
+
+      $('connect').disabled = true;
+      try {
+        // Capture the microphone before connecting, so a denied permission
+        // fails early and browsers that hide local addresses until media
+        // access is granted offer usable ICE candidates.
+        const [micTrack] = await createLocalTracks({ audio: true });
+        log('microphone acquired');
+        await room.connect($('url').value.trim(), $('token').value.trim());
+        log(`joined room ${room.name} as ${room.localParticipant.identity}`);
+        await room.localParticipant.publishTrack(micTrack);
+        log('microphone published');
+        $('disconnect').disabled = false;
+        statsTimer = setInterval(refreshStats, 1000);
+      } catch (err) {
+        log(`error: ${err.message}`);
+        $('status').textContent = `error: ${err.message}`;
+        teardown();
+      }
+    }
+
+    function teardown() {
+      clearInterval(statsTimer);
+      $('connect').disabled = false;
+      $('disconnect').disabled = true;
+    }
+
+    $('connect').onclick = connect;
+    $('disconnect').onclick = () => room?.disconnect();
+
+    const params = new URLSearchParams(location.search);
+    if (params.get('url')) $('url').value = params.get('url');
+    if (params.get('token')) $('token').value = params.get('token');
+    if (params.get('auto') === '1') connect();
+  </script>
+</body>
+</html>
