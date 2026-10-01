@@ -8,6 +8,7 @@ WEB_PORT    ?= 8000
 # orchestrator API as seen from the host
 API         ?= http://localhost:8080
 AGENT       ?= echo
+KEDA_VERSION := 2.21.0
 
 -include .env
 export LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET
@@ -18,9 +19,9 @@ export LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET
 # `make deploy NODE_IP=...` or NODE_IP in .env.
 NODE_IP ?= $(shell python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('192.0.2.1', 9)); print(s.getsockname()[0])" 2>/dev/null || echo 127.0.0.1)
 
-.PHONY: up down env cluster image secret node-ip deploy session sessions stop smoke test token dispatch web logs status
+.PHONY: up down env cluster addons image secret node-ip deploy session sessions stop workers scale top load smoke test token dispatch web logs status
 
-up: env cluster image secret deploy ## create the cluster and deploy everything
+up: env cluster addons image secret deploy ## create the cluster and deploy everything
 
 env: ## generate .env with random local LiveKit keys if it doesn't exist
 	@test -f .env || { \
@@ -30,6 +31,16 @@ env: ## generate .env with random local LiveKit keys if it doesn't exist
 
 cluster:
 	@kind get clusters | grep -qx $(CLUSTER) || kind create cluster --config kind-config.yaml
+
+# Pulls images from registry.k8s.io and ghcr.io. The metrics-server version is
+# pinned in deploy/addons/metrics-server/kustomization.yaml.
+addons: ## install metrics-server and KEDA
+	kubectl apply -k deploy/addons/metrics-server
+	kubectl apply --server-side -f https://github.com/kedacore/keda/releases/download/v$(KEDA_VERSION)/keda-$(KEDA_VERSION).yaml
+	kubectl -n kube-system rollout status deploy/metrics-server --timeout=180s
+	kubectl -n keda rollout status deploy/keda-operator --timeout=180s
+	kubectl -n keda rollout status deploy/keda-metrics-apiserver --timeout=180s
+	kubectl -n keda rollout status deploy/keda-admission --timeout=180s
 
 image:
 	docker build -t $(AGENT_IMAGE) agents/echo
@@ -76,6 +87,22 @@ sessions: ## list live and recently ended sessions
 stop: ## stop session ID
 	@test -n "$(ID)" || { echo "usage: make stop ID=s-..."; exit 1; }
 	@curl -fsS -X DELETE -o /dev/null -w '%{http_code}\n' $(API)/sessions/$(ID)
+
+workers: ## worker pods and the jobs each one is running
+	@curl -fsS $(API)/workers | jq -r '.workers[] | "\(.agent)  \(.address)  jobs=\(.jobs)  load=\(.load)\(if .full then "  FULL" else "" end)"'
+	@kubectl -n $(NAMESPACE) get pods -l app=agent-$(AGENT)
+
+# `kubectl scale` would be undone by the autoscaler within seconds; raising its
+# floor is the way to hold more workers. `make deploy` resets it to 1.
+scale: ## keep at least N worker pods
+	@test -n "$(N)" || { echo "usage: make scale N=3"; exit 1; }
+	kubectl -n $(NAMESPACE) patch scaledobject agent-$(AGENT) --type merge -p '{"spec":{"minReplicaCount":$(N)}}'
+
+top: ## CPU and memory per pod
+	kubectl -n $(NAMESPACE) top pods
+
+load: ## start COUNT sessions and watch the workers scale up and back down
+	API=$(API) AGENT=$(AGENT) NAMESPACE=$(NAMESPACE) scripts/load.sh
 
 smoke: ## end-to-end API check against the running cluster
 	API=$(API) scripts/smoke.sh

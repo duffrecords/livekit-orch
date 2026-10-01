@@ -7,7 +7,8 @@ set -euo pipefail
 API="${API:-http://localhost:8080}"
 COUNT="${COUNT:-10}"
 AGENT="${AGENT:-echo}"
-READY_TIMEOUT="${READY_TIMEOUT:-20}"
+# long enough for the autoscaler to add worker pods when COUNT exceeds one pod
+READY_TIMEOUT="${READY_TIMEOUT:-60}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

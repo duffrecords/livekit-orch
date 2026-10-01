@@ -20,6 +20,7 @@ from livekit.protocol import agent as agent_proto
 from livekit.protocol import models as models_proto
 
 from .config import Settings
+from .workers import WorkerDirectory
 
 logger = logging.getLogger("orchestrator.sessions")
 
@@ -106,16 +107,24 @@ def _dispatch(d: api.AgentDispatch) -> dict[str, Any]:
     }
 
 
+# statuses in which a session occupies, or is waiting for, a worker slot
+NEEDS_WORKER = ("pending", "ready", "active")
+
+
 class SessionService:
     def __init__(
         self,
         lk: api.LiveKitAPI,
         settings: Settings,
         clock: Callable[[], float] = time.time,
+        workers: WorkerDirectory | None = None,
     ):
         self._lk = lk
         self._settings = settings
         self._clock = clock
+        self._workers = workers or WorkerDirectory(settings)
+        # when each session's agent was last dispatched again
+        self._redispatched: dict[str, float] = {}
         self._ended: OrderedDict[str, dict[str, Any]] = OrderedDict()
         # live sessions this process has seen, as last observed
         self._seen: dict[str, api.Room] = {}
@@ -140,8 +149,10 @@ class SessionService:
             raise SessionNotFound(session_id)
         return room
 
-    async def _describe(self, room: api.Room) -> dict[str, Any]:
-        self._seen[room.name] = room
+    async def _room_state(
+        self, room: api.Room
+    ) -> tuple[str, list[api.ParticipantInfo], list[api.AgentDispatch]]:
+        """Status, participants and named dispatches of a live room."""
         participants, dispatches = await asyncio.gather(
             self._lk.room.list_participants(api.ListParticipantsRequest(room=room.name)),
             self._lk.agent_dispatch.list_dispatch(room.name),
@@ -150,18 +161,41 @@ class SessionService:
         # name, addressed to automatically dispatched (unnamed) workers. We only
         # run named agents, so it never produces a job.
         dispatches = [d for d in dispatches if d.agent_name]
+        status = derive_status(
+            bool(dispatches),
+            list(participants.participants),
+            job_assigned=any(d.state.jobs for d in dispatches),
+        )
+        return status, list(participants.participants), dispatches
+
+    async def _pending_reason(self, dispatches: list[api.AgentDispatch]) -> str | None:
+        """Why a pending session has no agent, as far as the workers can tell."""
+        agent = dispatches[0].agent_name
+        if not self._workers.knows(agent):
+            return None
+        workers = await self._workers.for_agent(agent)
+        if not workers:
+            return "no_workers"
+        if all(w["full"] for w in workers):
+            return "workers_full"
+        # a worker has room: the job is being assigned, or the dispatch was
+        # dropped and is about to be made again
+        return "waiting"
+
+    async def _describe(self, room: api.Room) -> dict[str, Any]:
+        self._seen[room.name] = room
+        status, participants, dispatches = await self._room_state(room)
         attributes = _room_attributes(room)
         return {
             "id": room.name,
-            "status": derive_status(
-                bool(dispatches),
-                list(participants.participants),
-                job_assigned=any(d.state.jobs for d in dispatches),
+            "status": status,
+            "pending_reason": (
+                await self._pending_reason(dispatches) if status == "pending" else None
             ),
             "agent": attributes.get("agent"),
             "created_at": _iso(room.creation_time),
             "metadata": attributes.get("metadata") or {},
-            "participants": [_participant(p) for p in participants.participants],
+            "participants": [_participant(p) for p in participants],
             "dispatches": [_dispatch(d) for d in dispatches],
         }
 
@@ -203,6 +237,23 @@ class SessionService:
             live = {s["id"] for s in sessions}
             sessions += [s for s in reversed(self._ended.values()) if s["id"] not in live]
         return sessions
+
+    async def demand(self, agent: str) -> dict[str, Any]:
+        """How many live sessions need a worker for this agent. Read by the autoscaler."""
+        self._check_agent(agent)
+        wanting = [
+            s
+            for s in await self.list_sessions()
+            if s["status"] in NEEDS_WORKER and any(d["agent"] == agent for d in s["dispatches"])
+        ]
+        return {
+            "agent": agent,
+            "sessions": len(wanting),
+            "pending": sum(s["status"] == "pending" for s in wanting),
+        }
+
+    async def workers(self) -> list[dict[str, Any]]:
+        return await self._workers.everything()
 
     # -- operations -------------------------------------------------------
 
@@ -332,6 +383,61 @@ class SessionService:
         for room in expired:
             await self._delete(room, "expired")
         return [room.name for room in expired]
+
+    async def redispatch(self) -> list[str]:
+        """Dispatch again for sessions that have waited too long for their agent.
+
+        LiveKit offers a dispatch to the workers once. If none is registered, or
+        all are full, it is dropped: a worker that appears or frees up later is
+        not offered it. Observed for both cases against server v1.13.7.
+        """
+        after = self._settings.redispatch_after_seconds
+        now = self._clock()
+        res = await self._lk.room.list_rooms(api.ListRoomsRequest())
+        rooms = [room for room in res.rooms if SESSION_ID.match(room.name)]
+        live = {room.name for room in rooms}
+        self._redispatched = {k: v for k, v in self._redispatched.items() if k in live}
+        done = []
+        for room in rooms:
+            if now - max(room.creation_time, self._redispatched.get(room.name, 0)) < after:
+                continue
+            try:
+                if await self._redispatch_room(room):
+                    done.append(room.name)
+            except api.TwirpError:
+                continue  # the room closed meanwhile
+        return done
+
+    async def _redispatch_room(self, room: api.Room) -> bool:
+        status, _, dispatches = await self._room_state(room)
+        if status != "pending":
+            return False
+        by_agent: dict[str, list[api.AgentDispatch]] = {}
+        for d in dispatches:
+            by_agent.setdefault(d.agent_name, []).append(d)
+        redone = False
+        for agent, stale in by_agent.items():
+            if self._workers.knows(agent) and all(
+                w["full"] for w in await self._workers.for_agent(agent)
+            ):
+                continue  # nowhere to send it yet
+            # replaced rather than added to, so a late answer to the old
+            # dispatch can't put a second agent in the room
+            for d in stale:
+                await self._lk.agent_dispatch.delete_dispatch(d.id, room.name)
+            fresh = await self._lk.agent_dispatch.create_dispatch(
+                api.CreateAgentDispatchRequest(
+                    agent_name=agent, room=room.name, metadata=stale[0].metadata
+                )
+            )
+            logger.info(
+                "agent re-dispatched",
+                extra={"session_id": room.name, "agent": agent, "dispatch_id": fresh.id},
+            )
+            redone = True
+        if redone:
+            self._redispatched[room.name] = self._clock()
+        return redone
 
     def handle_webhook(self, event: api.WebhookEvent) -> None:
         room = event.room.name or None

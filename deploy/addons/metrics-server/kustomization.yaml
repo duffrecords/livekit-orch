@@ -1,0 +1,15 @@
+# metrics-server, for `kubectl top` and for measuring what a session costs.
+# Not part of the scaling path: the autoscaler reads the orchestrator.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.9.0/components.yaml
+patches:
+  # kind's kubelets serve self-signed certificates
+  - target:
+      kind: Deployment
+      name: metrics-server
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kubelet-insecure-tls

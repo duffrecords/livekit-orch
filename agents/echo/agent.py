@@ -18,7 +18,27 @@ SAMPLE_RATE = 48000
 ECHO_DELAY_SECONDS = float(os.getenv("ECHO_DELAY_SECONDS", "1.0"))
 LOG_INTERVAL_SECONDS = 5.0
 
-server = AgentServer()
+# Sessions this worker pod runs at once. The framework's default load measure
+# is CPU use, which an echo job barely moves, so capacity is counted in jobs.
+MAX_JOBS = int(os.getenv("MAX_JOBS", "5"))
+# How long a worker told to stop (SIGTERM) waits for its sessions to end. Keep
+# the pod's terminationGracePeriodSeconds above this.
+DRAIN_TIMEOUT_SECONDS = int(os.getenv("DRAIN_TIMEOUT_SECONDS", "1800"))
+
+
+def job_load(worker: AgentServer) -> float:
+    return len(worker.active_jobs) / MAX_JOBS
+
+
+server = AgentServer(
+    load_fnc=job_load,
+    # full, and refusing jobs, at exactly MAX_JOBS
+    load_threshold=1.0,
+    # One warm process per slot. This is also what makes the worker count a
+    # job it has accepted but not yet started as one slot.
+    num_idle_processes=MAX_JOBS,
+    drain_timeout=DRAIN_TIMEOUT_SECONDS,
+)
 
 
 @server.rtc_session(agent_name="echo")

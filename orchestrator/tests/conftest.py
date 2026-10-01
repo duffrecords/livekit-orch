@@ -74,8 +74,16 @@ class FakeDispatches:
         dispatch = api.AgentDispatch(
             id=self._lk.next_id("AD"), agent_name=req.agent_name, room=req.room
         )
+        dispatch.metadata = req.metadata
         self._lk.dispatches[req.room].append(dispatch)
         return dispatch
+
+    async def delete_dispatch(self, dispatch_id: str, room_name: str) -> api.AgentDispatch:
+        self._lk.check()
+        dispatches = self._lk.dispatches[room_name]
+        found = next(d for d in dispatches if d.id == dispatch_id)
+        dispatches.remove(found)
+        return found
 
 
 class FakeLiveKit:
@@ -118,6 +126,36 @@ class FakeLiveKit:
         self.participants[room].clear()
 
 
+class FakeWorkers:
+    """Stands in for the worker pods: `pods` maps an agent name to its workers."""
+
+    def __init__(self):
+        self.pods: dict[str, list[dict]] = {}
+
+    def add(self, agent: str, jobs: int, capacity: int = 5) -> None:
+        self.pods.setdefault(agent, []).append(
+            {
+                "agent": agent,
+                "address": f"10.0.0.{sum(map(len, self.pods.values())) + 1}",
+                "jobs": jobs,
+                "load": jobs / capacity,
+                "full": jobs >= capacity,
+            }
+        )
+
+    def knows(self, agent: str) -> bool:
+        return agent in self.pods
+
+    async def for_agent(self, agent: str) -> list[dict]:
+        return self.pods.get(agent, [])
+
+    async def everything(self) -> list[dict]:
+        return [w for pods in self.pods.values() for w in pods]
+
+    async def aclose(self) -> None:
+        pass
+
+
 def sign_webhook(event: api.WebhookEvent, secret: str = API_SECRET) -> tuple[str, str]:
     """Body and Authorization header as the LiveKit server would send them."""
     body = MessageToJson(event)
@@ -133,6 +171,7 @@ def settings() -> Settings:
         agent_names=("echo", "voice"),
         ended_history_size=3,
         reaper_interval_seconds=3600,
+        redispatch_interval_seconds=3600,
     )
 
 
@@ -142,6 +181,11 @@ def lk() -> FakeLiveKit:
 
 
 @pytest.fixture
-def client(settings: Settings, lk: FakeLiveKit):
-    with TestClient(create_app(settings, lk)) as test_client:
+def workers() -> FakeWorkers:
+    return FakeWorkers()
+
+
+@pytest.fixture
+def client(settings: Settings, lk: FakeLiveKit, workers: FakeWorkers):
+    with TestClient(create_app(settings, lk, workers)) as test_client:
         yield test_client

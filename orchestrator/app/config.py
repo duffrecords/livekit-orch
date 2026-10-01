@@ -8,6 +8,15 @@ def _csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def _pairs(value: str) -> tuple[tuple[str, str], ...]:
+    """`a=x,b=y` as ((a, x), (b, y))."""
+    return tuple(
+        (key.strip(), val.strip())
+        for key, _, val in (item.partition("=") for item in _csv(value))
+        if key.strip() and val.strip()
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     # LiveKit server API as seen from this pod, and the credentials for it
@@ -19,6 +28,10 @@ class Settings:
 
     # agent names that may be dispatched; the first is the default
     agent_names: tuple[str, ...] = ("echo",)
+    # agent name -> host[:port] of the headless Service in front of its worker
+    # pods, used to ask each pod how busy it is. Agents without one are not
+    # listed by /workers and their pending sessions carry no reason.
+    worker_services: tuple[tuple[str, str], ...] = ()
 
     # room closes if nobody joins within this many seconds
     empty_timeout_seconds: int = 120
@@ -27,6 +40,10 @@ class Settings:
     # the reaper deletes sessions older than this, occupied or not
     session_max_seconds: int = 1800
     reaper_interval_seconds: float = 30.0
+    # A session still without its agent after this long is dispatched again:
+    # LiveKit drops a dispatch that no worker could take. 0 turns this off.
+    redispatch_after_seconds: float = 5.0
+    redispatch_interval_seconds: float = 5.0
     token_ttl_seconds: int = 3600
     # ended sessions remembered in memory
     ended_history_size: int = 200
@@ -46,6 +63,7 @@ class Settings:
             livekit_api_secret=env.get("LIVEKIT_API_SECRET", ""),
             livekit_public_url=env.get("LIVEKIT_PUBLIC_URL", d.livekit_public_url),
             agent_names=_csv(env.get("AGENT_NAMES", "")) or d.agent_names,
+            worker_services=_pairs(env.get("WORKER_SERVICES", "")),
             empty_timeout_seconds=int(env.get("EMPTY_TIMEOUT_SECONDS", d.empty_timeout_seconds)),
             departure_timeout_seconds=int(
                 env.get("DEPARTURE_TIMEOUT_SECONDS", d.departure_timeout_seconds)
@@ -53,6 +71,12 @@ class Settings:
             session_max_seconds=int(env.get("SESSION_MAX_SECONDS", d.session_max_seconds)),
             reaper_interval_seconds=float(
                 env.get("REAPER_INTERVAL_SECONDS", d.reaper_interval_seconds)
+            ),
+            redispatch_after_seconds=float(
+                env.get("REDISPATCH_AFTER_SECONDS", d.redispatch_after_seconds)
+            ),
+            redispatch_interval_seconds=float(
+                env.get("REDISPATCH_INTERVAL_SECONDS", d.redispatch_interval_seconds)
             ),
             token_ttl_seconds=int(env.get("TOKEN_TTL_SECONDS", d.token_ttl_seconds)),
             ended_history_size=int(env.get("ENDED_HISTORY_SIZE", d.ended_history_size)),

@@ -6,7 +6,14 @@ metadata:
   labels:
     app: agent-echo
 spec:
-  replicas: 1
+  # No `replicas`: the count belongs to the autoscaler (agent-echo-scaling.yaml)
+  # and `kubectl apply` would otherwise reset it on every deploy.
+  # Add a new pod before asking an old one to drain.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: agent-echo
@@ -17,6 +24,10 @@ spec:
     spec:
       # keep Service-derived LIVEKIT_* variables out of the worker's environment
       enableServiceLinks: false
+      # On SIGTERM the worker stops taking jobs and exits when its last session
+      # ends. Sessions are capped at SESSION_MAX_SECONDS (1800) by the
+      # orchestrator, so this never cuts one off.
+      terminationGracePeriodSeconds: 1860
       containers:
         - name: agent
           image: livekit-orch/agent-echo:dev
@@ -25,6 +36,11 @@ spec:
           env:
             - name: LIVEKIT_URL
               value: ws://livekit.livekit.svc.cluster.local:7880
+            # sessions per pod; the autoscaler's target is set relative to this
+            - name: MAX_JOBS
+              value: "5"
+            - name: DRAIN_TIMEOUT_SECONDS
+              value: "1800"
             - name: LIVEKIT_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -35,6 +51,16 @@ spec:
                 secretKeyRef:
                   name: livekit-keys
                   key: LIVEKIT_API_SECRET
+          # Measured: about 70m and 490 MB idle (the framework's preloaded
+          # fork server), plus about 45m and 15 MB per echo session with
+          # audio. No CPU limit: throttling would break up audio, and load is
+          # counted in jobs rather than CPU.
+          resources:
+            requests:
+              cpu: 300m
+              memory: 640Mi
+            limits:
+              memory: 1Gi
           ports:
             - name: health
               containerPort: 8081
@@ -49,3 +75,20 @@ spec:
               port: health
             initialDelaySeconds: 15
             periodSeconds: 10
+---
+# Headless: resolves to the ready worker pods, so the orchestrator can ask each
+# one how busy it is (GET :8081/worker). Nothing routes traffic through it;
+# workers dial out to LiveKit.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-echo
+  namespace: livekit
+spec:
+  clusterIP: None
+  selector:
+    app: agent-echo
+  ports:
+    - name: health
+      port: 8081
+      targetPort: health

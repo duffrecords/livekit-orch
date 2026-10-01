@@ -271,6 +271,105 @@ def test_reaped_session_reports_expired(client, lk, settings):
     assert client.get(f"/sessions/{sid}").json()["end_reason"] == "expired"
 
 
+# -- workers and scaling -------------------------------------------------
+
+
+def test_workers_lists_what_each_pod_reports(client, workers):
+    assert client.get("/workers").json() == {"workers": []}
+    workers.add("echo", jobs=5)
+    workers.add("echo", jobs=2)
+
+    listed = client.get("/workers").json()["workers"]
+    assert [(w["jobs"], w["full"]) for w in listed] == [(5, True), (2, False)]
+
+
+def test_pending_reason_says_why_there_is_no_agent(client, lk, workers):
+    sid = start(client)["id"]
+    # no worker Service configured for the agent: nothing to say
+    assert client.get(f"/sessions/{sid}").json()["pending_reason"] is None
+
+    workers.pods["echo"] = []
+    assert client.get(f"/sessions/{sid}").json()["pending_reason"] == "no_workers"
+    workers.add("echo", jobs=5)
+    assert client.get(f"/sessions/{sid}").json()["pending_reason"] == "workers_full"
+    workers.add("echo", jobs=0)
+    assert client.get(f"/sessions/{sid}").json()["pending_reason"] == "waiting"
+
+    lk.run_job(sid)
+    assert client.get(f"/sessions/{sid}").json()["pending_reason"] is None
+
+
+def test_scaling_counts_sessions_that_need_a_worker(client, lk):
+    waiting, running, gone = (start(client)["id"] for _ in range(3))
+    start(client, agent="voice")
+    start(client, agent=None)
+    lk.run_job(running)
+    lk.run_job(gone)
+    lk.leave_all(gone)  # closing: its agent has left, it needs no worker
+
+    assert client.get("/scaling/echo").json() == {"agent": "echo", "sessions": 2, "pending": 1}
+    assert client.get("/scaling/voice").json()["sessions"] == 1
+    assert client.get("/scaling/nope").status_code == 422
+
+
+# -- re-dispatch ---------------------------------------------------------
+
+
+def age(lk, sid: str, seconds: float) -> None:
+    lk.rooms[sid].creation_time = int(time.time() - seconds)
+
+
+def test_redispatch_replaces_the_dispatch_of_a_session_left_waiting(client, lk):
+    sid = start(client, metadata={"lang": "en"})["id"]
+    old = lk.dispatches[sid][0].id
+    service: SessionService = client.app.state.sessions
+
+    # too young: the first dispatch may still be on its way
+    assert client.portal.call(service.redispatch) == []
+    age(lk, sid, 10)
+    assert client.portal.call(service.redispatch) == [sid]
+
+    (fresh,) = lk.dispatches[sid]
+    assert fresh.id != old and fresh.agent_name == "echo"
+    # and not again until it has had its own chance
+    assert client.portal.call(service.redispatch) == []
+
+
+def test_redispatch_leaves_sessions_that_have_their_agent(client, lk):
+    sid = start(client)["id"]
+    lk.run_job(sid)
+    age(lk, sid, 10)
+    before = lk.dispatches[sid][0].id
+
+    assert client.portal.call(client.app.state.sessions.redispatch) == []
+    assert lk.dispatches[sid][0].id == before
+
+
+def test_redispatch_waits_for_a_worker_with_room(client, lk, workers):
+    sid = start(client)["id"]
+    age(lk, sid, 10)
+    service: SessionService = client.app.state.sessions
+
+    workers.pods["echo"] = []
+    assert client.portal.call(service.redispatch) == []
+    workers.add("echo", jobs=5)
+    assert client.portal.call(service.redispatch) == []
+
+    workers.add("echo", jobs=1)
+    assert client.portal.call(service.redispatch) == [sid]
+
+
+def test_redispatch_brings_a_new_agent_when_one_died_on_a_user(client, lk):
+    sid = start(client)["id"]
+    lk.run_job(sid)
+    lk.leave_all(sid)
+    lk.join(sid, "user1")
+    age(lk, sid, 10)
+
+    assert client.get(f"/sessions/{sid}").json()["status"] == "pending"
+    assert client.portal.call(client.app.state.sessions.redispatch) == [sid]
+
+
 # -- health and error mapping --------------------------------------------
 
 

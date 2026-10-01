@@ -26,6 +26,8 @@ status. Code in `orchestrator/` (Python 3.13, FastAPI, `livekit-api` 1.2), manif
 | `DELETE /sessions/{id}` | Delete the room. 204, also when already ended; 404 if unknown |
 | `POST /sessions/{id}/dispatches` | Dispatch another agent: `{"agent": "echo", "metadata": {…}}` |
 | `POST /sessions/{id}/tokens` | Another join token: `{"identity": "user2"}` |
+| `GET /workers` | Ready worker pods with their job count and load, read from each pod through the agent's headless Service (`WORKER_SERVICES`) |
+| `GET /scaling/{agent}` | `{"agent", "sessions", "pending"}`: live sessions that need a worker for that agent. Read by the autoscaler |
 | `POST /webhooks/livekit` | LiveKit webhook receiver; 401 unless signed with the API key |
 | `GET /healthz`, `GET /readyz` | Liveness (process up) and readiness (LiveKit API answers within 2 s) |
 
@@ -41,7 +43,7 @@ Derived on every read from `ListRooms`, `ListParticipants` and `ListDispatch`.
 
 | Status | Meaning |
 |---|---|
-| `pending` | Room exists, an agent is expected, none is in the room (no worker for that name, or workers at capacity) |
+| `pending` | Room exists, an agent is expected, none is in the room. `pending_reason` says why: `no_workers`, `workers_full`, or `waiting` (a worker has room; the job is being assigned or is about to be dispatched again) |
 | `ready` | Agent in the room, no user yet (or a session with no agent and no user) |
 | `active` | At least one user in the room, and the agent if one is expected |
 | `closing` | The agent has come and gone and the room is empty; it closes when `departure_timeout` expires |
@@ -59,11 +61,15 @@ Derived on every read from `ListRooms`, `ListParticipants` and `ListDispatch`.
 `room_finished` webhooks record sessions that ended on their own, and every room and
 participant event is logged.
 
+A session left `pending` for more than `REDISPATCH_AFTER_SECONDS` (5) is dispatched again,
+because LiveKit drops a dispatch no worker could take. This also replaces an agent that died
+while a user was connected. Details: `docs/notes/scaling.md`.
+
 ## Logs
 
 JSON lines on stdout (`make logs`): one `request` line per call (method, path, status,
 duration, session ID; probes only at `DEBUG`), plus `session started`, `agent dispatched`,
-`session ended` (reason and duration) and `livekit event` lines. Set `LOG_LEVEL` to change
+`session ended` (reason and duration), `agent re-dispatched` and `livekit event` lines. Set `LOG_LEVEL` to change
 the level.
 
 ## What LiveKit does (findings that shaped the code)
@@ -89,7 +95,7 @@ the level.
 
 ## Verified (2026-09-30, macOS, headless Chrome with a fake microphone)
 
-- `make test`: 26 unit tests against a fake LiveKit client.
+- `make test`: 26 unit tests against a fake LiveKit client (33 since the scaling milestone).
 - `make smoke`: 10 sessions started in parallel, all `ready`, all stopped, no room left; 1.7 s
   in total on one worker pod. The worker afterwards held only its warm idle processes.
 - Two browser tabs each started their own session from the test page and received echoed
@@ -100,12 +106,11 @@ the level.
 
 - No authentication. Next step beyond a local demo: a shared bearer token.
 - One replica (ended-session history and the reaper are in-process).
-- `pending` cannot tell "no worker registered" from "workers at capacity".
-- A session whose agent crashes while a user is still connected reads `pending`; LiveKit's
-  job state is too unreliable to say more.
-- The worker keeps one warm idle process per CPU the node reports (16 here) because its pod
-  has no CPU limit. Worker capacity was not pushed past 10 concurrent sessions. Both belong to
-  the scaling milestone.
+- A session whose agent crashes while a user is still connected reads `pending` (about 24 s
+  after a hard kill, when LiveKit drops the dead participant) and gets a new agent from the
+  re-dispatch.
+- Worker capacity, warm processes and scaling are covered in `docs/notes/scaling.md`.
 - `make deploy` does not restart pods when an image is rebuilt under the same `:dev` tag; use
-  `kubectl -n livekit rollout restart deploy/orchestrator` after `make image`.
+  `kubectl -n livekit rollout restart deploy/orchestrator` after `make image`. For the
+  workers, a restart waits for live sessions to end.
 - LiveKit still runs with `--dev`, which prints join tokens in its log.

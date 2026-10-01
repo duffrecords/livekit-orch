@@ -32,6 +32,9 @@ spec:
               value: ws://localhost:7880
             - name: AGENT_NAMES
               value: echo
+            # agent name = headless Service of its worker pods
+            - name: WORKER_SERVICES
+              value: echo=agent-echo.livekit.svc.cluster.local:8081
             - name: LIVEKIT_API_KEY
               valueFrom:
                 secretKeyRef:

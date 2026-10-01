@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import aiohttp
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from .config import Settings
 from .logging import setup_logging
 from .sessions import SessionNotFound, SessionService, UnknownAgent
+from .workers import WorkerDirectory
 
 logger = logging.getLogger("orchestrator")
 
@@ -97,6 +98,16 @@ async def create_token(request: Request, session_id: str, body: TokenRequest | N
     return await _sessions(request).token(session_id, body.identity if body else None)
 
 
+@router.get("/workers", tags=["scaling"])
+async def list_workers(request: Request):
+    return {"workers": await _sessions(request).workers()}
+
+
+@router.get("/scaling/{agent}", tags=["scaling"])
+async def scaling_demand(request: Request, agent: str):
+    return await _sessions(request).demand(agent)
+
+
 @router.post("/webhooks/livekit", status_code=204, tags=["webhooks"])
 async def livekit_webhook(request: Request) -> Response:
     body = (await request.body()).decode()
@@ -108,18 +119,22 @@ async def livekit_webhook(request: Request) -> Response:
     return Response(status_code=204)
 
 
-async def _reaper(sessions: SessionService, interval: float) -> None:
+async def _every(interval: float, name: str, task: Callable[[], Awaitable[Any]]) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            await sessions.reap()
+            await task()
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            logger.warning("reaper pass skipped: LiveKit unreachable", extra={"error": str(err)})
+            logger.warning(f"{name} pass skipped: LiveKit unreachable", extra={"error": str(err)})
         except Exception:
-            logger.exception("reaper pass failed")
+            logger.exception(f"{name} pass failed")
 
 
-def create_app(settings: Settings | None = None, lk: api.LiveKitAPI | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    lk: api.LiveKitAPI | None = None,
+    workers: WorkerDirectory | None = None,
+) -> FastAPI:
     settings = settings or Settings.from_env()
     setup_logging(settings.log_level)
 
@@ -128,18 +143,27 @@ def create_app(settings: Settings | None = None, lk: api.LiveKitAPI | None = Non
         client = lk or api.LiveKitAPI(
             settings.livekit_url, settings.livekit_api_key, settings.livekit_api_secret
         )
-        app.state.sessions = SessionService(client, settings)
-        reaper = asyncio.create_task(
-            _reaper(app.state.sessions, settings.reaper_interval_seconds)
-        )
+        directory = workers or WorkerDirectory(settings)
+        sessions = app.state.sessions = SessionService(client, settings, workers=directory)
+        background = [
+            asyncio.create_task(_every(settings.reaper_interval_seconds, "reaper", sessions.reap))
+        ]
+        if settings.redispatch_after_seconds > 0:
+            background.append(
+                asyncio.create_task(
+                    _every(settings.redispatch_interval_seconds, "re-dispatch", sessions.redispatch)
+                )
+            )
         logger.info(
             "orchestrator started",
             extra={"livekit_url": settings.livekit_url, "agents": list(settings.agent_names)},
         )
         yield
-        reaper.cancel()
-        with suppress(asyncio.CancelledError):
-            await reaper
+        for task in background:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        await directory.aclose()
         if lk is None:
             await client.aclose()
 
