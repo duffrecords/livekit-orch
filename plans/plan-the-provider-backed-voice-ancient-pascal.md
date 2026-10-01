@@ -10,8 +10,9 @@
 > its delays; requests are `400m` / `900Mi` with a `1536Mi` limit, and no CPU trigger was
 > needed; `load.sh` lists only the tested agent's workers. The OpenAI account's rate limit
 > (10 requests per minute for transcription and TTS) at first failed five concurrent
-> conversations; they passed once credits were added to the account. Not checked: a person on a real microphone,
-> and "provider dashboards show no usage" (checked through the worker log instead).
+> conversations; they passed once credits were added to the account. A person on a real
+> microphone was checked afterwards, by hand, in Chrome, Firefox and Safari. Not checked:
+> "provider dashboards show no usage" (checked through the worker log instead).
 > What was built and measured: `docs/notes/voice-pipeline-providers.md`.
 
 ## Context

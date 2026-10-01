@@ -53,7 +53,7 @@ Original plan: `plans/plan-the-provider-backed-voice-ancient-pascal.md`.
 
 ## Verified (2026-10-01, macOS, kind)
 
-Conversations were driven by synthesized speech (`say`), published with `lk room join --publish` or through headless Chrome's fake microphone.
+Conversations were driven by synthesized speech (`say`), published with `lk room join --publish` or through headless Chrome's fake microphone, except the real-microphone row, which was a person talking to the agent.
 
 | Check | Result |
 |---|---|
@@ -61,6 +61,7 @@ Conversations were driven by synthesized speech (`say`), published with `lk room
 | Swap by configuration | Deepgram STT + Claude Haiku 4.5 + Deepgram TTS, and Deepgram + `openai/gpt-4.1-mini`, with no code change |
 | Per-session metadata | `instructions` and `greeting` applied |
 | Browser client | Transcript of both sides and agent state shown; agent audio received |
+| Real microphone, by hand | A spoken conversation with the agent worked in Chrome, Firefox and Safari |
 | User leaves / browser killed / `DELETE` | Job ends; room closes (`closing` → `ended`); nothing left behind |
 | Missing key, unknown provider | Worker exits at startup with the reason |
 | Nonexistent model | One error line per failed turn, agent stays in the room, no re-dispatch |
@@ -87,7 +88,7 @@ Usage of one 30 s conversation (greeting and two short answers), from the end-of
 | LLM | 174 input, 14 output tokens | 156 input, 59 output tokens |
 | TTS | 119 characters, 14 s of audio | 286 characters, 16.5 s of audio |
 
-Not verified: a person talking through a real microphone and listening (all audio was synthetic and checked through transcripts, logs and inbound audio energy); Firefox and Safari with the voice agent; Deepgram or Anthropic keys that are missing or invalid, as opposed to a wrong model name.
+Not verified: Deepgram or Anthropic keys that are missing or invalid, as opposed to a wrong model name.
 
 ## Dependencies and trade-offs
 
