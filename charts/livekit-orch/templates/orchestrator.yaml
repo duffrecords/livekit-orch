@@ -1,10 +1,11 @@
+{{- $labels := include "livekit-orch.labels" (dict "name" "orchestrator" "root" $) -}}
+{{- $image := .Values.orchestrator.image -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: orchestrator
-  namespace: livekit
   labels:
-    app: orchestrator
+    {{- $labels | nindent 4 }}
 spec:
   # Ended-session history and the reaper live in this process, so run one
   # replica. Live-session calls are stateless.
@@ -15,38 +16,36 @@ spec:
   template:
     metadata:
       labels:
-        app: orchestrator
+        {{- $labels | nindent 8 }}
+      {{- with $image.id }}
+      annotations:
+        livekit-orch/image-id: {{ . | quote }}
+      {{- end }}
     spec:
       # keep Service-derived LIVEKIT_* variables out of the environment
       enableServiceLinks: false
       containers:
         - name: orchestrator
-          image: livekit-orch/orchestrator:dev
-          # image is side-loaded with `kind load docker-image`
-          imagePullPolicy: Never
+          image: {{ $image.repository }}:{{ $image.tag }}
+          imagePullPolicy: {{ $image.pullPolicy }}
           env:
             - name: LIVEKIT_URL
-              value: http://livekit.livekit.svc.cluster.local:7880
-            # signaling URL handed to clients, as seen from the host
+              value: http://{{ include "livekit-orch.host" (dict "name" "livekit" "root" $) }}:7880
             - name: LIVEKIT_PUBLIC_URL
-              value: ws://localhost:7880
-            # the first is the default; voice has workers only when .env holds
-            # a provider key
+              value: {{ .Values.orchestrator.publicUrl | quote }}
+            # the first is the default
             - name: AGENT_NAMES
-              value: echo,voice
+              value: {{ include "livekit-orch.agentNames" . | quote }}
             # agent name = headless Service of its worker pods
             - name: WORKER_SERVICES
-              value: echo=agent-echo.livekit.svc.cluster.local:8081,voice=agent-voice.livekit.svc.cluster.local:8081
-            - name: LIVEKIT_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: livekit-keys
-                  key: LIVEKIT_API_KEY
-            - name: LIVEKIT_API_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: livekit-keys
-                  key: LIVEKIT_API_SECRET
+              value: {{ include "livekit-orch.workerServices" . | quote }}
+            - name: SESSION_MAX_SECONDS
+              value: {{ int .Values.sessionMaxSeconds | quote }}
+            {{- range $key, $value := .Values.orchestrator.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- include "livekit-orch.keysEnv" . | nindent 12 }}
           ports:
             - name: http
               containerPort: 8080
@@ -68,7 +67,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: orchestrator
-  namespace: livekit
+  labels:
+    {{- $labels | nindent 4 }}
 spec:
   type: NodePort
   selector:
@@ -77,6 +77,5 @@ spec:
     - name: http
       port: 8080
       targetPort: http
-      # kind maps this node port to 127.0.0.1:8080 on the host
-      nodePort: 30080
+      nodePort: {{ .Values.orchestrator.nodePort }}
       protocol: TCP

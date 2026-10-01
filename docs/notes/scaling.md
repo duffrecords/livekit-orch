@@ -1,8 +1,9 @@
 # Worker scaling
 
 How worker pods get a fixed capacity, how their number follows demand, and what keeps a
-session alive through a scale-down. Manifests: `deploy/agent-echo.yaml`,
-`deploy/agent-echo-scaling.yaml`, `deploy/addons/`. Original plan: `plans/worker-scaling.md`.
+session alive through a scale-down. Manifests: `charts/livekit-orch/templates/agents.yaml`
+(one Deployment, headless Service and `ScaledObject` per entry under `agents:` in the chart's
+values), `deploy/addons/`. Original plan: `plans/worker-scaling.md`.
 
 ## Model
 
@@ -30,7 +31,7 @@ session alive through a scale-down. Manifests: `deploy/agent-echo.yaml`,
 | `make addons` | Install metrics-server and KEDA (part of `make up`) |
 | `make load` | Start `COUNT` (12) sessions at once, show them being picked up as pods are added, stop them after `HOLD` (30) seconds, show the pods going away |
 | `make workers` | Jobs and load per worker pod, and the pod list |
-| `make scale N=3` | Hold at least N worker pods (sets the autoscaler's minimum; `make deploy` resets it to 1) |
+| `make scale N=3` | Hold at least N worker pods (sets `agents.<name>.scaling.minReplicas` on the release; `make deploy` resets it to 1) |
 | `make top` | CPU and memory per pod |
 
 `kubectl scale deploy/agent-echo` does not stick: the HPA overrides it within seconds.
@@ -91,7 +92,7 @@ The voice agent (2026-10-01), same method, five live conversations driven by `lk
 
 The numbers were the same with OpenAI and with Deepgram + Claude. Its requests are `cpu: 400m`,
 `memory: 900Mi`, memory limit `1536Mi`. It keeps `MAX_JOBS` 5 and the target of 3 sessions per
-pod, with at most 3 pods (`deploy/voice/agent-voice-scaling.yaml`). `make load AGENT=voice
+pod, with at most 3 pods (`agents.voice.scaling` in the chart's values). `make load AGENT=voice
 COUNT=8` took the workers 1 → 3 → 1 with all sessions `ready` after 13 s.
 
 Not verified: audio heard in a browser during a scale-down. Agent presence was checked through
@@ -101,7 +102,7 @@ the API, and audio through the agent's frame counters with an `lk` publisher.
 
 - **KEDA** (v2.21.0, three pods in the `keda` namespace) and **metrics-server** (v0.9.0, with
   `--kubelet-insecure-tls` because kind's kubelet certificates are self-signed). Both are
-  pulled from the internet by `make addons`. metrics-server is only for `kubectl top`; the
+  pulled from the internet by `make addons`, KEDA through its Helm chart. metrics-server is only for `kubectl top`; the
   scaling path does not use it.
 - **Job count, not CPU.** Deterministic and right for the echo agent. It ignores real CPU
   pressure, so `MAX_JOBS` has to be sized by measurement for each agent. The voice agent did

@@ -1,0 +1,9 @@
+Orchestrator API: http://localhost:8080 (docs at /docs), through the kind port mapping.
+LiveKit signaling: {{ .Values.orchestrator.publicUrl }}, advertising {{ .Values.livekit.nodeIP }} for media.
+
+Agents: {{ include "livekit-orch.agentNames" . }}
+{{- range $name, $agent := .Values.agents }}{{ if not $agent.enabled }}
+  {{ $name }} has no workers (agents.{{ $name }}.enabled is false).{{ end }}{{ end }}
+
+  make smoke      end-to-end check
+  make web        browser test client

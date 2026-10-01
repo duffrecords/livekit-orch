@@ -2,7 +2,7 @@
 
 HTTP API in front of LiveKit: start a session, stop it, dispatch an agent to a room, report
 status. Code in `orchestrator/` (Python 3.13, FastAPI, `livekit-api` 1.2), manifest in
-`deploy/orchestrator.yaml`. Original plan: `plans/orchestrator-api.md`.
+`charts/livekit-orch/templates/orchestrator.yaml`. Original plan: `plans/orchestrator-api.md`.
 
 ## Model
 
@@ -110,7 +110,6 @@ the level.
   after a hard kill, when LiveKit drops the dead participant) and gets a new agent from the
   re-dispatch.
 - Worker capacity, warm processes and scaling are covered in `docs/notes/scaling.md`.
-- `make deploy` does not restart pods when an image is rebuilt under the same `:dev` tag; use
-  `kubectl -n livekit rollout restart deploy/orchestrator` after `make image`. For the
-  workers, a restart waits for live sessions to end.
-- LiveKit still runs with `--dev`, which prints join tokens in its log.
+- An image rebuilt under the same `:dev` tag is picked up by the next `make deploy` (since the
+  Helm milestone, `docs/notes/deployment.md`). For the workers, the rollout waits for live
+  sessions to end.

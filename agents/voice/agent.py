@@ -55,6 +55,8 @@ TURN_METRICS = (
     "e2e_latency",
 )
 
+# Name the worker registers under; sessions are dispatched to it by this name.
+AGENT_NAME = os.getenv("AGENT_NAME", "voice")
 # Sessions this worker pod runs at once. Capacity is counted in jobs, as for
 # the echo agent.
 MAX_JOBS = int(os.getenv("MAX_JOBS", "5"))
@@ -113,7 +115,7 @@ server = AgentServer(
 )
 
 
-@server.rtc_session(agent_name="voice")
+@server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext):
     instructions, greeting = job_options(ctx.job.metadata)
     logger.info("connecting to room %s", ctx.room.name)

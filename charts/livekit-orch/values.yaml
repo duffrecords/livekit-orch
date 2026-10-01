@@ -1,0 +1,127 @@
+# Object names are fixed (livekit, orchestrator, agent-<name>), so install one
+# release per namespace. `make deploy` installs it and passes the values that
+# are only known on the machine: livekit.nodeIP, agents.voice.enabled, the
+# local image IDs.
+#
+# Needs KEDA in the cluster (`make addons`) for the workers' ScaledObjects.
+
+secrets:
+  # Existing Secret with LIVEKIT_API_KEY, LIVEKIT_API_SECRET and LIVEKIT_KEYS
+  # ("<key>: <secret>"). `make secret` creates it from .env. Keys never go in
+  # values: they would end up in the release record.
+  livekitKeys: livekit-keys
+
+# Longest a session may run. The orchestrator deletes older sessions, a worker
+# told to stop waits this long for its sessions, and the workers' termination
+# grace period is this plus 60, so a scale-down or rollout never cuts one off.
+sessionMaxSeconds: 1800
+
+livekit:
+  image:
+    repository: livekit/livekit-server
+    tag: v1.13.7
+  # Required. The address LiveKit advertises to clients outside the cluster:
+  # the host's LAN address, which browsers reach through the kind port
+  # mappings (Firefox can't use a loopback candidate). Changing it restarts
+  # LiveKit.
+  nodeIP: ""
+  # Interfaces the server may bind. With hostNetwork it sees every pod veth on
+  # the node; kindnet gives them all the same address, and binding the UDP mux
+  # to each one fails with "address already in use".
+  interfaces:
+    - eth0
+  # Development mode: debug logging, which prints join tokens.
+  dev: false
+
+orchestrator:
+  image:
+    repository: livekit-orch/orchestrator
+    tag: dev
+    # side-loaded with `kind load docker-image`
+    pullPolicy: Never
+    # Local image ID, set by `make deploy`. It goes into a pod annotation, so
+    # an image rebuilt under the same tag rolls the pods.
+    id: ""
+  # signaling URL handed to clients, as seen from the host
+  publicUrl: ws://localhost:7880
+  # kind maps this node port to 127.0.0.1:8080 on the host
+  nodePort: 30080
+  # agent a session gets when it names none; must be a key of `agents`
+  defaultAgent: echo
+  # further settings, as environment variables (see orchestrator/app/config.py),
+  # e.g. EMPTY_TIMEOUT_SECONDS: "120"
+  env: {}
+
+# One entry per agent name; the worker registers under it (AGENT_NAME), so
+# one image can serve several entries. Each enabled entry gets a worker Deployment, a
+# headless Service the orchestrator reads job counts through, and a KEDA
+# ScaledObject. Every entry, enabled or not, is an agent the orchestrator
+# accepts: a session for an agent without workers reads `pending (no_workers)`.
+agents:
+  echo:
+    enabled: true
+    image:
+      repository: livekit-orch/agent-echo
+      tag: dev
+      pullPolicy: Never
+      id: ""
+    # sessions per pod; scaling.sessionsPerPod is set relative to this
+    maxJobs: 5
+    # Measured: about 70m and 490 MB idle (the framework's preloaded fork
+    # server), plus about 45m and 15 MB per echo session with audio. No CPU
+    # limit: throttling would break up audio, and load is counted in jobs
+    # rather than CPU.
+    resources:
+      requests:
+        cpu: 300m
+        memory: 640Mi
+      limits:
+        memory: 1Gi
+    scaling:
+      minReplicas: 1
+      maxReplicas: 6
+      # Sessions per pod to aim for: replicas = ceil(sessions / 3). A pod
+      # holds maxJobs (5), so the fleet runs about 60 % full. The spare slots
+      # matter: LiveKit drops a dispatch that no worker can take.
+      sessionsPerPod: 3
+      # Short, so a demo shows the scale-down. A removed pod drains its
+      # sessions first, so a wrong guess costs nothing but pod churn.
+      scaleDownStabilizationSeconds: 60
+    # further environment variables for the worker
+    env: {}
+
+  # The provider-backed voice agent. `make deploy` enables it when .env holds
+  # a provider API key.
+  voice:
+    enabled: false
+    image:
+      repository: livekit-orch/agent-voice
+      tag: dev
+      pullPolicy: Never
+      id: ""
+    maxJobs: 5
+    # Measured: about 65m and 500 MB idle, about 350m and 880 MB with five
+    # conversations (roughly 60m and 75 MB each).
+    resources:
+      requests:
+        cpu: 400m
+        memory: 900Mi
+      limits:
+        memory: 1536Mi
+    scaling:
+      minReplicas: 1
+      # lower than echo's 6: both fleets share one node and its 8 GB
+      maxReplicas: 3
+      sessionsPerPod: 3
+      scaleDownStabilizationSeconds: 60
+    env: {}
+    # Existing Secret with OPENAI_API_KEY, DEEPGRAM_API_KEY, ANTHROPIC_API_KEY,
+    # whichever are set in .env. Created by `make deploy`.
+    envFromSecret: provider-keys
+    # Existing ConfigMap with the VOICE_* settings from .env (provider/model
+    # per stage, voice, instructions, greeting). Optional: unset ones fall
+    # back to agent.py.
+    envFromConfigMap: agent-voice-config
+    # Set by `make deploy` to the versions of the two objects above. The
+    # workers read them at startup only, so a change has to roll the pods.
+    configVersion: ""

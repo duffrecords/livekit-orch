@@ -66,7 +66,7 @@ Fix: advertise the host's LAN address instead of loopback, and publish the kind 
 
 The in-cluster agent is unchanged (node IP ↔ pod IP).
 
-How it is wired: `make deploy` detects the host's primary address and stores it in ConfigMap `livekit-node`; the LiveKit pod reads it as `NODE_IP`. The address is never written to the repo. Consequences:
+How it is wired: `make deploy` detects the host's primary address and passes it to the chart as `livekit.nodeIP`, which becomes the LiveKit pod's `NODE_IP` (until the Helm milestone it went through a ConfigMap, `livekit-node`). The address is never written to the repo. Consequences:
 
 - Ports 7880–7882 are reachable from the local network, not just the host. Keys are random per machine, but treat the cluster as LAN-visible.
 - After switching networks, re-run `make deploy`; it restarts LiveKit if the address changed.
@@ -89,7 +89,7 @@ The test page also acquires the microphone before connecting. That alone did not
 - A client that vanishes without a leave message is only dropped after about 20 s; the agent keeps receiving silence until then.
 - After the last participant leaves, the room lingers for the default `departure_timeout` (20 s) and then closes on its own. Faster cleanup needs an explicit room delete.
 - An agent does not keep a room alive. Seen in a manual test: user joined and left, the agent was dispatched 8 s later, and the room still closed on the departure timeout, ejecting the agent; the user's next join created a fresh room with no agent. The orchestrator should create the room and dispatch as one step, before handing out a token.
-- `--dev` turns on debug logging, which prints join tokens in the server log. Drop `--dev` once the real chart sets keys and ports explicitly.
+- `--dev` turns on debug logging, which prints join tokens in the server log. Dropped in the Helm milestone (`livekit.dev` in the chart's values, off by default); see `docs/notes/deployment.md`.
 - kind has no metrics API by default (`kubectl top` fails), so an HPA needs metrics-server installed first.
 
 ### Not covered

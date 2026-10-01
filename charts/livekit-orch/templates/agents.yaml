@@ -1,0 +1,138 @@
+{{- range $name, $agent := .Values.agents }}
+{{- if $agent.enabled }}
+{{- $fullname := printf "agent-%s" $name }}
+{{- $labels := include "livekit-orch.labels" (dict "name" $fullname "root" $) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  # No `replicas`: the count belongs to the autoscaler (the ScaledObject
+  # below) and an upgrade would otherwise reset it.
+  # Add a new pod before asking an old one to drain.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: {{ $fullname }}
+  template:
+    metadata:
+      labels:
+        {{- $labels | nindent 8 }}
+      {{- if or $agent.image.id $agent.configVersion }}
+      annotations:
+        {{- with $agent.image.id }}
+        livekit-orch/image-id: {{ . | quote }}
+        {{- end }}
+        {{- with $agent.configVersion }}
+        livekit-orch/config-version: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    spec:
+      # keep Service-derived LIVEKIT_* variables out of the worker's environment
+      enableServiceLinks: false
+      # On SIGTERM the worker stops taking jobs and exits when its last session
+      # ends. Sessions are capped at sessionMaxSeconds by the orchestrator, so
+      # this never cuts one off.
+      terminationGracePeriodSeconds: {{ add (int $.Values.sessionMaxSeconds) 60 }}
+      containers:
+        - name: agent
+          image: {{ $agent.image.repository }}:{{ $agent.image.tag }}
+          imagePullPolicy: {{ $agent.image.pullPolicy }}
+          {{- if or $agent.envFromConfigMap $agent.envFromSecret }}
+          envFrom:
+            {{- with $agent.envFromConfigMap }}
+            - configMapRef:
+                name: {{ . }}
+                optional: true
+            {{- end }}
+            {{- with $agent.envFromSecret }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          env:
+            - name: LIVEKIT_URL
+              value: ws://{{ include "livekit-orch.host" (dict "name" "livekit" "root" $) }}:7880
+            # the name the worker registers under is the key in `agents`
+            - name: AGENT_NAME
+              value: {{ $name | quote }}
+            - name: MAX_JOBS
+              value: {{ int $agent.maxJobs | quote }}
+            - name: DRAIN_TIMEOUT_SECONDS
+              value: {{ int $.Values.sessionMaxSeconds | quote }}
+            {{- range $key, $value := $agent.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- include "livekit-orch.keysEnv" $ | nindent 12 }}
+          resources:
+            {{- toYaml $agent.resources | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+# Headless: resolves to the ready worker pods, so the orchestrator can ask each
+# one how busy it is (GET :8081/worker). Nothing routes traffic through it;
+# workers dial out to LiveKit.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    app: {{ $fullname }}
+  ports:
+    - name: health
+      port: 8081
+      targetPort: health
+---
+# KEDA turns this into an ordinary HorizontalPodAutoscaler
+# (`kubectl get hpa`) fed by the orchestrator's count of sessions that need a
+# worker for this agent.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ $fullname }}
+  minReplicaCount: {{ $agent.scaling.minReplicas }}
+  maxReplicaCount: {{ $agent.scaling.maxReplicas }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+        scaleDown:
+          stabilizationWindowSeconds: {{ $agent.scaling.scaleDownStabilizationSeconds }}
+  triggers:
+    - type: metrics-api
+      metadata:
+        url: http://{{ include "livekit-orch.host" (dict "name" "orchestrator" "root" $) }}:8080/scaling/{{ $name }}
+        valueLocation: sessions
+        targetValue: {{ $agent.scaling.sessionsPerPod | quote }}
+{{- end }}
+{{- end }}

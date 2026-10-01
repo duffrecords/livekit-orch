@@ -1,0 +1,6 @@
+apiVersion: v2
+name: livekit-orch
+description: Self-hosted LiveKit server, a session orchestrator API, and autoscaled voice-agent workers for a local cluster
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

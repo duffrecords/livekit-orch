@@ -18,6 +18,8 @@ SAMPLE_RATE = 48000
 ECHO_DELAY_SECONDS = float(os.getenv("ECHO_DELAY_SECONDS", "1.0"))
 LOG_INTERVAL_SECONDS = 5.0
 
+# Name the worker registers under; sessions are dispatched to it by this name.
+AGENT_NAME = os.getenv("AGENT_NAME", "echo")
 # Sessions this worker pod runs at once. The framework's default load measure
 # is CPU use, which an echo job barely moves, so capacity is counted in jobs.
 MAX_JOBS = int(os.getenv("MAX_JOBS", "5"))
@@ -41,7 +43,7 @@ server = AgentServer(
 )
 
 
-@server.rtc_session(agent_name="echo")
+@server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext):
     logger.info("connecting to room %s", ctx.room.name)
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
