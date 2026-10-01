@@ -57,7 +57,7 @@ With `node_ip: 127.0.0.1`, Firefox (154, real microphone) failed with `could not
 - Firefox never completes a check to the server's `127.0.0.1` candidate. Enabling `media.peerconnection.ice.loopback` did not help.
 - Chrome was unaffected: it reaches `127.0.0.1:7882`, and it also sent a real host candidate that the server could reach directly.
 
-Fix: advertise the host's LAN address instead of loopback, and publish the kind ports on all interfaces so that address is served. A manual run in Firefox 154 with a real microphone then worked: the echo was audible. Headless results with the fix:
+Fix: advertise the host's LAN address instead of loopback, and publish the kind ports on all interfaces so that address is served. Manual runs with a real microphone then worked in Firefox 154 and in Safari: the echo was audible in both. Which transport Safari selected was not recorded. Headless results with the fix:
 
 | Browser | UDP | TCP only (`force_tcp`) |
 |---|---|---|
@@ -94,4 +94,4 @@ The test page also acquires the microphone before connecting. That alone did not
 
 ### Not covered
 
-Safari, Windows and Linux hosts, a second device on the LAN, VPN or firewall interference, LiveKit's embedded TURN, and more than one worker replica.
+Windows and Linux hosts, a second device on the LAN, VPN or firewall interference, LiveKit's embedded TURN, and more than one worker replica.

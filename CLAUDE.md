@@ -30,4 +30,4 @@ Local orchestration layer for LiveKit voice agents, running on a local Kubernete
 
 - Secrets (API keys, LiveKit API key/secret) live in a git-ignored `.env` → Kubernetes Secret; Helm charts reference an existing Secret. Never put keys in `values.yaml` or commits.
 - LiveKit Agents APIs have changed across versions — verify against current docs before writing worker code.
-- The networking spike is done (Chrome, Firefox and an in-cluster echo agent exchange audio over UDP and TCP). `make up` / `make down` manage the cluster; `make env` generates local LiveKit keys into `.env`. Next is the orchestrator API.
+- The networking spike is done (Chrome, Firefox, Safari and an in-cluster echo agent exchange audio; Chrome and Firefox verified over both UDP and TCP). `make up` / `make down` manage the cluster; `make env` generates local LiveKit keys into `.env`. Next is the orchestrator API.
